@@ -132,6 +132,29 @@ def cmd_banned(message):
         bot.send_message(message.chat.id, f"Заблокированы:\n{ids}")
 
 
+HEADER = "📩 <b>У тебя новое анонимное сообщение!</b>"
+FOOTER = "<i>↩️ Свайпни для ответа.</i>"
+# У этих типов не бывает подписи, поэтому заголовок шлём отдельно
+NO_CAPTION_TYPES = {"sticker", "video_note"}
+
+
+def quote(text):
+    return f"<blockquote>{telebot.util.escape(text)}</blockquote>\n\n" if text else ""
+
+
+def send_anon_to_admin(message):
+    """Шлёт админу заголовок и само сообщение одним сообщением."""
+    if message.content_type == "text":
+        return bot.send_message(ADMIN_ID, f"{HEADER}\n\n{quote(message.text)}{FOOTER}")
+    if message.content_type in NO_CAPTION_TYPES:
+        bot.send_message(ADMIN_ID, HEADER)
+        return bot.copy_message(ADMIN_ID, message.chat.id, message.message_id)
+    # фото, видео, голосовые и т.д. — заголовок идёт в подпись
+    caption = f"{HEADER}\n\n{quote(message.caption)}{FOOTER}"
+    return bot.copy_message(ADMIN_ID, message.chat.id, message.message_id,
+                            caption=caption, parse_mode="HTML")
+
+
 CONTENT_TYPES = [
     "text", "photo", "video", "voice", "video_note", "audio",
     "document", "sticker", "animation",
@@ -147,15 +170,14 @@ def on_user_message(message):
         return
 
     # 1) само сообщение — без автора
-    bot.send_message(ADMIN_ID, "📩 <b>У тебя новое анонимное сообщение!</b>")
-    copied = bot.copy_message(ADMIN_ID, message.chat.id, message.message_id)
+    copied = send_anon_to_admin(message)
     link_message(copied.message_id, user.id)
 
     # 2) следующим сообщением — кто отправил
     card = bot.send_message(ADMIN_ID, sender_card(user), reply_markup=admin_keyboard(user.id))
     link_message(card.message_id, user.id)
     # для кнопки «В канал» запоминаем, какое сообщение публиковать
-    data["links"][f"post:{card.message_id}"] = copied.message_id
+    data["links"][f"post:{card.message_id}"] = [message.chat.id, message.message_id]
     save_data()
 
     if CHANNEL_ENABLED:
@@ -198,9 +220,9 @@ def on_callback(call):
             save_data()
         bot.answer_callback_query(call.id, "Пользователь разблокирован")
     elif action == "post":
-        msg_id = data["links"].get(f"post:{call.message.message_id}")
-        if msg_id and CHANNEL_ID:
-            bot.copy_message(CHANNEL_ID, ADMIN_ID, msg_id)
+        src = data["links"].get(f"post:{call.message.message_id}")
+        if src and CHANNEL_ID:
+            bot.copy_message(CHANNEL_ID, src[0], src[1])
             bot.answer_callback_query(call.id, "Опубликовано в канале")
         else:
             bot.answer_callback_query(call.id, "Канал не настроен", show_alert=True)
